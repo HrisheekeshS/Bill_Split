@@ -26,7 +26,9 @@ export default function Auth() {
         alert("Account created successfully!");
       } else {
         // Sign In
-        await signInWithEmailAndPassword(auth, username, password);
+        
+        const result=await signInWithEmailAndPassword(auth, username, password);
+        window.localStorage.setItem("user",JSON.stringify(result.user))
         alert("Signed in successfully!");
       }
       navigate("/dashboard");
@@ -38,7 +40,9 @@ export default function Auth() {
   // Google Sign In
   const handleGoogleSignIn = async () => {
     try {
-      await signInWithPopup(auth, provider);
+
+      const result=await signInWithPopup(auth, provider);
+      window.localStorage.setItem("user",JSON.stringify(result.user))
       alert("Signed in with Google!");
       navigate("/dashboard");
     } catch (err) {

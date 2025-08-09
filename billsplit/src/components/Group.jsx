@@ -1,7 +1,7 @@
-// Group.jsx
+// src/pages/Group.jsx
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { db, auth } from "../lib/firebase"; // adjust if you export auth differently
+import { db, auth } from "../lib/firebase";
 import {
   doc,
   onSnapshot,
@@ -19,87 +19,76 @@ export default function Group() {
   const [currentUser, setCurrentUser] = useState(null);
   const [error, setError] = useState("");
 
+  // Auth listener
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, user => {
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
     });
     return () => unsubAuth();
   }, []);
 
+  // Firestore real-time listener for group
   useEffect(() => {
     if (!id) return;
     const docRef = doc(db, "groups", id);
-    const unsub = onSnapshot(docRef, snap => {
+    const unsub = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         const data = { id: snap.id, ...snap.data() };
         setGroup(data);
-        // set default paidBy to current user if present & is a member
         if (auth?.currentUser && data.memberEmails?.includes(auth.currentUser.email)) {
           setPaidBy(auth.currentUser.email);
-        } else if (!paidBy && data.memberEmails && data.memberEmails.length > 0) {
+        } else if (!paidBy && data.memberEmails?.length > 0) {
           setPaidBy(data.memberEmails[0]);
         }
       } else {
         setGroup(null);
       }
     });
-
     return () => unsub();
   }, [id]);
 
-  // helper: compute balances (positive => should receive, negative => owes)
-  const calculateBalances = (members = [], expenses = []) => {
+  // Calculate balances including payments
+  const calculateBalances = (members = [], expenses = [], payments = []) => {
     const balances = {};
-    members.forEach(m => (balances[m] = 0));
+    members.forEach((m) => (balances[m] = 0));
 
-    const eps = 0.005;
-    (expenses || []).forEach(exp => {
+    // Expenses
+    expenses.forEach((exp) => {
       const paid = exp.paidBy;
       const amt = Number(exp.amount) || 0;
       const split = exp.split || {};
-
-      // We'll trust split sums to equal amount (we create them that way),
-      // but handle gracefully if they don't.
-      members.forEach(m => {
+      members.forEach((m) => {
         const share = Number(split[m] ?? 0);
-        if (m === paid) {
-          // payer effectively paid others' shares: he should receive (amount - his own share)
-          balances[m] += amt - share;
-        } else {
-          // other members owe their share
-          balances[m] -= share;
-        }
+        if (m === paid) balances[m] += amt - share;
+        else balances[m] -= share;
       });
     });
 
-    // round to 2 decimals for display / further computations
-    Object.keys(balances).forEach(k => {
-      balances[k] = Math.round((balances[k] + Number.EPSILON) * 100) / 100;
-      // zero small floats
-      if (Math.abs(balances[k]) < eps) balances[k] = 0;
+    // Payments
+    payments.forEach((p) => {
+      if (balances[p.from] !== undefined) balances[p.from] += p.amount;
+      if (balances[p.to] !== undefined) balances[p.to] -= p.amount;
     });
 
-    return balances;
+    return Object.fromEntries(
+      Object.entries(balances).map(([m, bal]) => [m, Math.round(bal * 100) / 100])
+    );
   };
 
-  // helper: produce settlement suggestions (greedy)
-  // returns array of { from, to, amount }
-  const computeSettlements = balancesObj => {
-    const eps = 0.005;
+  // Compute who owes whom
+  const computeSettlements = (balancesObj) => {
     const creditors = [];
     const debtors = [];
     Object.entries(balancesObj).forEach(([email, bal]) => {
-      if (bal > eps) creditors.push({ email, amount: Math.round(bal * 100) }); // cents
-      else if (bal < -eps) debtors.push({ email, amount: Math.round(-bal * 100) }); // cents owed
+      if (bal > 0.005) creditors.push({ email, amount: Math.round(bal * 100) });
+      else if (bal < -0.005) debtors.push({ email, amount: Math.round(-bal * 100) });
     });
 
-    // sort largest first (not necessary but gives nicer grouping)
     creditors.sort((a, b) => b.amount - a.amount);
     debtors.sort((a, b) => b.amount - a.amount);
 
     const settlements = [];
-    let i = 0,
-      j = 0;
+    let i = 0, j = 0;
     while (i < debtors.length && j < creditors.length) {
       const debtor = debtors[i];
       const creditor = creditors[j];
@@ -117,37 +106,24 @@ export default function Group() {
     return settlements;
   };
 
+  // Add expense
   const handleAddExpense = async () => {
     setError("");
-    if (!group) {
-      setError("Group not loaded.");
-      return;
-    }
-    const n = group.memberEmails.length;
-    if (!desc.trim()) {
-      setError("Enter a description.");
-      return;
-    }
+    if (!group) return setError("Group not loaded.");
+    if (!desc.trim()) return setError("Enter a description.");
     const amtNum = Number(amount);
-    if (isNaN(amtNum) || amtNum <= 0) {
-      setError("Enter a valid positive amount.");
-      return;
-    }
-    if (!paidBy || !group.memberEmails.includes(paidBy)) {
-      setError("Select a valid payer.");
-      return;
-    }
+    if (isNaN(amtNum) || amtNum <= 0) return setError("Enter a valid positive amount.");
+    if (!paidBy || !group.memberEmails.includes(paidBy)) return setError("Select a valid payer.");
 
-    // Split fairly by cents to avoid floating rounding issues:
+    const n = group.memberEmails.length;
     const amountCents = Math.round(amtNum * 100);
     const base = Math.floor(amountCents / n);
-    const remainder = amountCents % n; // distribute +1 cent to first `remainder` members
+    const remainder = amountCents % n;
 
     const split = {};
-    // Keep stable order: distribute extra cents to first members in memberEmails order
     group.memberEmails.forEach((email, idx) => {
       const cents = base + (idx < remainder ? 1 : 0);
-      split[email] = cents / 100; // rupees decimal
+      split[email] = cents / 100;
     });
 
     const docRef = doc(db, "groups", id);
@@ -161,149 +137,177 @@ export default function Group() {
           createdAt: new Date().toISOString()
         })
       });
-
       setDesc("");
       setAmount("");
-      // keep paidBy as same person (convenience)
     } catch (e) {
       console.error("add expense failed", e);
-      setError("Failed to add expense. Check console for details.");
+      setError("Failed to add expense.");
+    }
+  };
+
+  // Per-expense payment
+  const handleExpensePay = async (expense) => {
+    if (!group || !currentUser) return;
+    try {
+      const docRef = doc(db, "groups", id);
+      await updateDoc(docRef, {
+        payments: arrayUnion({
+          from: currentUser.email,
+          to: expense.paidBy,
+          amount: expense.split[currentUser.email],
+          expenseDescription: expense.description,
+          createdAt: new Date().toISOString()
+        })
+      });
+    } catch (err) {
+      console.error("Expense payment failed", err);
     }
   };
 
   if (!group) return <p className="p-6">Loading group...</p>;
 
-  const balances = calculateBalances(group.memberEmails || [], group.expenses || []);
+  const balances = calculateBalances(group.memberEmails || [], group.expenses || [], group.payments || []);
   const settlements = computeSettlements(balances);
 
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-4">{group.name}</h1>
 
+      {/* Members */}
       <div className="mb-4">
         <h2 className="font-semibold">Members</h2>
-        <ul className="mb-2">
+        <ul>
           {group.memberEmails.map((email) => (
-            <li key={email} className="flex items-center gap-3">
-              <span>{email}</span>
-              {currentUser?.email === email && (
-                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">You</span>
-              )}
+            <li key={email}>
+              {email} {currentUser?.email === email && <span>(You)</span>}
             </li>
           ))}
         </ul>
       </div>
 
+      {/* Add Expense */}
       <div className="bg-gray-100 p-4 rounded mb-4">
         <h3 className="font-semibold mb-2">Add Expense</h3>
-
         {error && <div className="text-red-600 mb-2">{error}</div>}
-
         <input
           type="text"
           placeholder="Description"
           value={desc}
           onChange={(e) => setDesc(e.target.value)}
-          className="w-full p-2 text-black border rounded mb-2 placeholder-gray"
+          className="w-full p-2 border rounded mb-2"
         />
-
         <input
           type="number"
           placeholder="Amount"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
-          className="w-full p-2 text-black border rounded mb-2"
+          className="w-full p-2 border rounded mb-2"
         />
-
-        <label className="block mb-2 text-sm font-medium">Payer</label>
         <select
           value={paidBy}
           onChange={(e) => setPaidBy(e.target.value)}
           className="w-full p-2 border rounded mb-2"
         >
-          {group.memberEmails.map(email => (
+          {group.memberEmails.map((email) => (
             <option key={email} value={email}>
               {email} {auth?.currentUser?.email === email ? "(you)" : ""}
             </option>
           ))}
         </select>
-
-        <div className="flex gap-2">
-          <button
-            onClick={handleAddExpense}
-            className="bg-green-500 text-white px-4 py-2 rounded"
-          >
-            Add Expense
-          </button>
-          <button
-            onClick={() => { setDesc(""); setAmount(""); setError(""); }}
-            className="bg-gray-300 px-4 py-2 rounded"
-          >
-            Clear
-          </button>
-        </div>
+        <button onClick={handleAddExpense} className="bg-green-500 text-white px-4 py-2 rounded">
+          Add Expense
+        </button>
       </div>
 
+      {/* Balances */}
       <div className="mb-4">
         <h2 className="font-semibold mb-2">Balances</h2>
-        <ul>
-          {Object.entries(balances).map(([email, bal]) => (
-            <li key={email} className="mb-1">
-              <strong>{email}</strong> —{" "}
-              {bal > 0
-                ? `should receive ₹${bal.toFixed(2)}`
-                : bal < 0
-                ? `owes ₹${Math.abs(bal).toFixed(2)}`
-                : "is settled"}
-            </li>
-          ))}
-        </ul>
+        {Object.entries(balances).map(([email, bal]) => (
+          <div key={email}>
+            {email} — {bal > 0 ? `should receive ₹${bal}` : bal < 0 ? `owes ₹${Math.abs(bal)}` : "settled"}
+          </div>
+        ))}
       </div>
 
+      {/* Settlement Suggestions */}
       <div className="mb-4">
         <h2 className="font-semibold mb-2">Settle-up suggestions</h2>
         {settlements.length > 0 ? (
-          <ul>
-            {settlements.map((s, idx) => (
-              <li key={idx} className="mb-1">
-                <span className="block">
-                  <strong>{s.from}</strong> pays <strong>{s.to}</strong> — ₹{s.amount.toFixed(2)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          settlements.map((s, idx) => (
+            <div key={idx} className="flex justify-between mb-1">
+              <span>
+                {s.from} → {s.to} : ₹{s.amount}
+              </span>
+              {currentUser?.email === s.from && (
+                <button
+                  onClick={() => handleExpensePay({ paidBy: s.to, split: { [s.from]: s.amount }, description: "Settle-up" })}
+                  className="bg-blue-500 text-white px-2 py-1 rounded"
+                >
+                  Pay
+                </button>
+              )}
+            </div>
+          ))
         ) : (
           <p>Everyone is settled.</p>
         )}
       </div>
 
-      <div className="mb-4">
+      {/* Expenses with per-expense pay buttons */}
+      <div>
         <h2 className="font-semibold mb-2">Expenses</h2>
         {group.expenses?.length > 0 ? (
-          <ul>
-            {group.expenses.map((exp, i) => (
-              <li key={i} className="mb-2 p-2 border rounded">
+          group.expenses.map((exp, i) => {
+            const userShare = exp.split?.[currentUser?.email] || 0;
+            const userOwes = currentUser?.email !== exp.paidBy && userShare > 0;
+
+            // Check if already paid
+            const alreadyPaid = group.payments?.some(
+              (p) =>
+                p.from === currentUser?.email &&
+                p.to === exp.paidBy &&
+                p.expenseDescription === exp.description
+            );
+
+            return (
+              <div key={i} className="border p-2 mb-2 rounded">
                 <div className="flex justify-between">
                   <div>
-                    <strong>{exp.description}</strong>
+                    <strong>{exp.description}</strong> — ₹{Number(exp.amount).toFixed(2)}
                     <div className="text-sm text-gray-600">
-                      paid by <strong>{exp.paidBy}</strong>
+                      Paid by <strong>{exp.paidBy}</strong>
                     </div>
                   </div>
-                  <div>₹{Number(exp.amount).toFixed(2)}</div>
+                  {userOwes && !alreadyPaid && (
+                    <button
+                      onClick={() => handleExpensePay(exp)}
+                      className="bg-blue-500 text-white px-3 py-1 rounded text-sm"
+                    >
+                      Pay ₹{userShare.toFixed(2)}
+                    </button>
+                  )}
                 </div>
 
-                <div className="mt-2">
-                  <div className="text-sm font-medium">Split</div>
-                  {Object.entries(exp.split || {}).map(([email, amt]) => (
-                    <div key={email} className="text-sm">
-                      {email}: ₹{Number(amt).toFixed(2)}
-                    </div>
-                  ))}
+                <div className="mt-2 text-sm">
+                  <span className="font-medium">Split:</span>
+                  {Object.entries(exp.split || {}).map(([email, amt]) => {
+                    const memberPaid = group.payments?.some(
+                      (p) =>
+                        p.from === email &&
+                        p.to === exp.paidBy &&
+                        p.expenseDescription === exp.description
+                    );
+                    return (
+                      <div key={email}>
+                        {email}: ₹{amt.toFixed(2)}{" "}
+                        {memberPaid && <span className="text-green-600">✅</span>}
+                      </div>
+                    );
+                  })}
                 </div>
-              </li>
-            ))}
-          </ul>
+              </div>
+            );
+          })
         ) : (
           <p>No expenses yet.</p>
         )}

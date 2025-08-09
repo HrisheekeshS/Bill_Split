@@ -30,7 +30,8 @@ export default function CreateGroup() {
       name,
       memberEmails,
       memberIds: [auth.currentUser.uid],
-      expenses: []
+      expenses: [],
+      createdBy:auth.currentUser.uid
     });
     navigate("/dashboard");
   };
