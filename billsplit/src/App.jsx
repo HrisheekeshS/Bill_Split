@@ -1,7 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import SignIn from "./components/signin";
 import Dashboard from "./components/Dashboard";
-import CreateGroup from "./components/Creategroup";
+import CreateGroup from "./components/CreateGroup";
 import Group from "./components/Group";
 
 export default function App() {
