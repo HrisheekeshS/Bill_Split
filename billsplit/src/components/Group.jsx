@@ -186,27 +186,27 @@ export default function Group() {
       </div>
 
       {/* Add Expense */}
-      <div className="bg-gray-100 p-4 rounded mb-4">
-        <h3 className="font-semibold mb-2">Add Expense</h3>
+      <div className="bg-gray-300 p-4 rounded mb-4">
+        <h3 className="font-semibold mb-2 text-black">Add Expense</h3>
         {error && <div className="text-red-600 mb-2">{error}</div>}
         <input
           type="text"
           placeholder="Description"
           value={desc}
           onChange={(e) => setDesc(e.target.value)}
-          className="w-full p-2 border rounded mb-2"
+          className="w-full p-2 border-black rounded mb-2 text-black"
         />
         <input
           type="number"
           placeholder="Amount"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
-          className="w-full p-2 border rounded mb-2"
+          className="w-full text-black p-2 border rounded mb-2"
         />
         <select
           value={paidBy}
           onChange={(e) => setPaidBy(e.target.value)}
-          className="w-full p-2 border rounded mb-2"
+          className="w-full p-2 border rounded mb-2 text-black"
         >
           {group.memberEmails.map((email) => (
             <option key={email} value={email}>
